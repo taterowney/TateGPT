@@ -7,6 +7,9 @@ from tokenizer import encode, decode, START_OF_TEXT, END_OF_TEXT, PADDING_TOKEN,
 
 from data_parser import TRAIN, TEST, VALIDATION
 
+# Gcloud command:
+# gcloud compute ssh instance-name
+
 
 # If this is True then the training loops will be cut short so it doesn't go through the entire process
 EXPERIMENTING = True
