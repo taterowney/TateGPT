@@ -38,8 +38,7 @@ DEVICE = get_device()
 
 # Lame version
 MAX_TOKENS = 1000
-# FEATURES = 256
-FEATURES = 128
+FEATURES = 256
 BATCH_SIZE = 4
 
 class PositionalEncoding(nn.Module):
@@ -327,17 +326,18 @@ def predict_tokens(model, prompt, context, max_length=10):
 
 if __name__ == '__main__':
     transformer = TransformerModel()
-    fit(transformer, torch.optim.Adam(transformer.parameters(), lr=0.0001), nn.CrossEntropyLoss().to(DEVICE), num_epochs=10)
+    # fit(transformer, torch.optim.Adam(transformer.parameters(), lr=0.0001), nn.CrossEntropyLoss().to(DEVICE), num_epochs=10)
+    fit(transformer, torch.optim.SGD(transformer.parameters(), lr=0.01), nn.CrossEntropyLoss().to(DEVICE), num_epochs=10)
     save_model(transformer)
 
     #
     # from data_parser import done_message
     # done_message()
 
-    transformer = load_model(transformer)
+    # transformer = load_model(transformer)
     # print(predict(transformer, "Albedo", "'''Albedo''' is the science of", 10))
 
     print(predict_tokens(transformer, [1], [1, 0, 1, 0, 1, 0, 1, 0, 1, 0], 10))
     # print(test_loss_function([1, 2, 3, 4, 5, 6, 7, 8], [1, 2, 3, 4, 5, 6, 7, 8]))
 
-# TODO: Checkpointing, reverting if model overfits, token accuracy, increased speed of data processing, ACTIVATION FUNCTIONS LOL, tweak learning rate
+# TODO: Checkpointing, reverting if model overfits, token accuracy, increased speed of data processing, tweak learning rate
