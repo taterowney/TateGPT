@@ -1,11 +1,11 @@
+from torch import Tensor
 import torch
-import numpy as np
 import torch.nn as nn
+from torch.nn import Transformer
+from torch.nn.utils.rnn import pad_sequence
 import math, tqdm, time, os, glob
 
-from tokenizer import encode, decode, START_OF_TEXT, END_OF_TEXT, PADDING_TOKEN, VOCAB_SIZE, pad_end
-
-from data_parser import TRAIN, TEST, VALIDATION
+from tokenizer import PADDING_TOKEN, VOCAB_SIZE, pad_end, encode, decode
 
 # Gcloud command:
 # gcloud compute ssh instance-name
@@ -21,6 +21,17 @@ from data_parser import TRAIN, TEST, VALIDATION
 # If this is True then the training loops will be cut short so it doesn't go through the entire process
 EXPERIMENTING = True
 
+# MAXIMUM POWER!!!!!
+# MAX_TOKENS = 1000
+# FEATURES = 2048
+# BATCH_SIZE = 16
+
+# Lame version
+MAX_TOKENS = 50
+FEATURES = 256
+BATCH_SIZE = 4
+
+
 def get_device():
     if torch.cuda.is_available():
         return torch.device('cuda')
@@ -31,80 +42,84 @@ def get_device():
 
 DEVICE = get_device()
 
-# MAXIMUM POWER!!!!!
-# MAX_TOKENS = 1000
-# FEATURES = 2048
-# BATCH_SIZE = 16
-
-# Lame version
-MAX_TOKENS = 1000
-FEATURES = 256
-BATCH_SIZE = 4
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, dim_model, dropout_p, max_len=MAX_TOKENS):
-        super().__init__()
-        # Modified version from: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
-        # max_len determines how far the position can have an effect on a token (window)
+    def __init__(self,
+                 emb_size: int,
+                 dropout: float,
+                 maxlen: int = 5000):
+        super(PositionalEncoding, self).__init__()
+        den = torch.exp(- torch.arange(0, emb_size, 2)* math.log(10000) / emb_size)
+        pos = torch.arange(0, maxlen).reshape(maxlen, 1)
+        pos_embedding = torch.zeros((maxlen, emb_size))
+        pos_embedding[:, 0::2] = torch.sin(pos * den)
+        pos_embedding[:, 1::2] = torch.cos(pos * den)
+        pos_embedding = pos_embedding.unsqueeze(-2)
 
-        # Info
-        self.dropout = nn.Dropout(dropout_p)
+        self.dropout = nn.Dropout(dropout)
+        self.register_buffer('pos_embedding', pos_embedding)
 
-        # Encoding - From formula
-        pos_encoding = torch.zeros(max_len, dim_model)
-        positions_list = torch.arange(0, max_len, dtype=torch.float).view(-1, 1)  # 0, 1, 2, 3, 4, 5
-        division_term = torch.exp(
-            torch.arange(0, dim_model, 2).float() * (-math.log(10000.0)) / dim_model)  # 1000^(2i/dim_model)
+    def forward(self, token_embedding: Tensor):
+        return self.dropout(token_embedding + self.pos_embedding[:token_embedding.size(0), :])
 
-        # PE(pos, 2i) = sin(pos/1000^(2i/dim_model))
-        pos_encoding[:, 0::2] = torch.sin(positions_list * division_term)
+# helper Module to convert tensor of input indices into corresponding tensor of token embeddings
+class TokenEmbedding(nn.Module):
+    def __init__(self, vocab_size: int, emb_size):
+        super(TokenEmbedding, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, emb_size)
+        self.emb_size = emb_size
 
-        # PE(pos, 2i + 1) = cos(pos/1000^(2i/dim_model))
-        pos_encoding[:, 1::2] = torch.cos(positions_list * division_term)
+    def forward(self, tokens: Tensor):
+        return self.embedding(tokens.long()) * math.sqrt(self.emb_size)
 
-        # Saving buffer (same as parameter without gradients needed)
-        pos_encoding = pos_encoding.unsqueeze(0).transpose(0, 1)
-        self.register_buffer("pos_encoding", pos_encoding)
+# Seq2Seq Network
+class Seq2SeqTransformer(nn.Module):
+    def __init__(self, num_encoder_layers: int, num_decoder_layers: int, emb_size: int, nhead: int, vocab_size=VOCAB_SIZE, dim_feedforward: int = 512, dropout: float = 0.1):
+        super(Seq2SeqTransformer, self).__init__()
+        self.transformer = Transformer(d_model=emb_size,
+                                       nhead=nhead,
+                                       num_encoder_layers=num_encoder_layers,
+                                       num_decoder_layers=num_decoder_layers,
+                                       dim_feedforward=dim_feedforward,
+                                       dropout=dropout,
+                                       batch_first=True)
+        self.generator = nn.Linear(emb_size, vocab_size)
+        self.src_tok_emb = TokenEmbedding(vocab_size, emb_size)
+        self.tgt_tok_emb = TokenEmbedding(vocab_size, emb_size)
+        self.positional_encoding = PositionalEncoding(
+            emb_size, dropout=dropout)
+        self.normalize_weights()
 
-    def forward(self, token_embedding: torch.tensor) -> torch.tensor:
-        # Residual connection + pos encoding
-        return self.dropout(token_embedding + self.pos_encoding[:token_embedding.size(0), :])
+    def forward(self, src: Tensor, trg: Tensor):
 
+        # embed and encode the input tokens
+        src_emb = self.positional_encoding(self.src_tok_emb(src))
+        tgt_emb = self.positional_encoding(self.tgt_tok_emb(trg))
 
+        # create masks to prevent the model from caring about padding tokens
+        src_padding_mask = (src == PADDING_TOKEN).type(torch.float32)
+        tgt_padding_mask = (trg == PADDING_TOKEN).type(torch.float32)
 
+        # create masks to prevent the model peeking at future tokens
+        tgt_mask = self.transformer.generate_square_subsequent_mask(trg.shape[1]).to(DEVICE)
 
-class TransformerModel(nn.Module):
-    def __init__(self, features=FEATURES, num_tokens=MAX_TOKENS, vocab_size=VOCAB_SIZE, dropout=0.1):
-        super(TransformerModel, self).__init__()
+        outs = self.transformer(src_emb, tgt_emb, tgt_mask=tgt_mask, src_key_padding_mask=src_padding_mask, tgt_key_padding_mask=tgt_padding_mask)
+        return self.generator(outs)
 
-        self.embedding = nn.Embedding(vocab_size, features).to(DEVICE)
-        self.positional_encoding = PositionalEncoding(features, 0.1, num_tokens).to(DEVICE)
+    def normalize_weights(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_normal_(p)
 
-        self.transformer = nn.Transformer(num_decoder_layers=8, nhead=16, batch_first=True, d_model=features, dropout=dropout).to(DEVICE)
+def save_model(model, path=f"./models/transformer_model_{int(time.time())}.pth"):
+    torch.save(model.state_dict(), path)
+    print(f"Model saved to {path}")
 
-        # self.activation1 = nn.ReLU().to(DEVICE)
-        # self.flatten = nn.Flatten().to(DEVICE)
-        # self.linear1 = nn.Linear(num_tokens*features, features).to(DEVICE)
-        self.activation2 = nn.ReLU().to(DEVICE)
-        self.linear2 = nn.Linear(features, VOCAB_SIZE).to(DEVICE)
-
-    def forward(self, prompt, context):
-
-        prompt = self.positional_encoding(self.embedding(prompt)).type(torch.float32)
-        context = self.positional_encoding(self.embedding(context)).type(torch.float32)
-
-        tgt_mask = self.transformer.generate_square_subsequent_mask(context.size(1)).to(DEVICE)
-
-        output = self.transformer(prompt, context, tgt_mask=tgt_mask)
-
-        # output = self.flatten(output)
-
-        # output = self.linear1(output)
-        output = self.linear2(self.activation2(output))
-
-        # return nn.functional.softmax(output.type(torch.float32), dim=1)
-        return output.type(torch.float32)
-
+def load_model(model, path=None):
+    if not path:
+        path = max(glob.glob("./models/*.pth"), key=os.path.getctime)
+    model.load_state_dict(torch.load(path, weights_only=True))
+    return model
 
 
 # DATA LOADING + HANDLING
@@ -140,7 +155,7 @@ class XMLDataset(torch.utils.data.Dataset):
         chunk = self.get_nth_chunk(body_tokens, chunk_num)
         title_tokens = list(map(int, child.find('key').text.split(',')))
         title_tokens = pad_end(title_tokens, self.num_tokens)
-        return torch.tensor(title_tokens, dtype=torch.long), torch.tensor(chunk[:-1], dtype=torch.long), torch.tensor(chunk[1:], dtype=torch.long)
+        return torch.tensor(title_tokens, dtype=torch.long), torch.tensor(chunk, dtype=torch.long)
 
     def get_nth_chunk(self, tokens, n):
         # returns the n-th set of num_tokens+1 tokens
@@ -158,186 +173,118 @@ class DebuggingDataset(torch.utils.data.Dataset):
         return 100
 
     def __getitem__(self, idx):
-        title_tokens = pad_end([1], self.num_tokens)
-        body_tokens = [1, 0]*(self.num_tokens//2) + [1]
-        return torch.tensor(title_tokens, dtype=torch.long), torch.tensor(body_tokens[:-1], dtype=torch.long), torch.tensor(body_tokens[1:], dtype=torch.long)
+        title_tokens = [1]*self.num_tokens
+        # body_tokens = [1, 0]*(self.num_tokens//2) + [1]
+        body_tokens = [1, 0, 0, 1]*(self.num_tokens//4) + [1]
+        return torch.tensor(title_tokens, dtype=torch.long), torch.tensor(body_tokens, dtype=torch.long)
+
 
 def get_dataloaders(name="default", train=0.9, validation=0.05, test=0.05, batch_size=BATCH_SIZE, num_tokens=MAX_TOKENS):
     if name == "default":
         ds = XMLDataset('cleaned_data', num_tokens=num_tokens)
         train, validation, test = torch.utils.data.random_split(ds, [int(len(ds)*train), int(len(ds)*validation), len(ds) - int(len(ds)*train) - int(len(ds)*validation)])
         return torch.utils.data.DataLoader(train, batch_size=batch_size, shuffle=True), torch.utils.data.DataLoader(validation, batch_size=batch_size, shuffle=True), torch.utils.data.DataLoader(test, batch_size=batch_size, shuffle=True)
-    elif name == "unittest":
+    elif name == "debug":
         ds = DebuggingDataset(num_tokens=num_tokens)
         train, validation, test = torch.utils.data.random_split(ds, [90, 5, 5])
         return torch.utils.data.DataLoader(train, batch_size=batch_size, shuffle=True), torch.utils.data.DataLoader(validation, batch_size=batch_size, shuffle=True), torch.utils.data.DataLoader(test, batch_size=batch_size, shuffle=True)
 
 
-TRAIN_LOADER, VALIDATION_LOADER, TEST_LOADER = get_dataloaders("unittest")
-
-
-def train_loop(model, opt, loss_fn):
+def train_epoch(model, optimizer, loss_fn, train_loader):
     model.train()
-    total_loss = 0
-    num_batches = 0
+    losses = 0
+
+    train = XMLDataset('cleaned_data', num_tokens=MAX_TOKENS)
+    train_loader = torch.utils.data.DataLoader(train, batch_size=BATCH_SIZE, shuffle=False)
 
     i = 0
-    for batch_x, batch_y, batch_target in tqdm.tqdm(TRAIN_LOADER, desc="Training model"):
-        batch_x, batch_y, batch_target = batch_x.to(DEVICE), batch_y.to(DEVICE), batch_target.to(DEVICE)
+    for src, tgt in tqdm.tqdm(train_loader, desc="Training model"):
+        src = src.to(DEVICE)
+        tgt = tgt.to(DEVICE)
 
-        output = model(batch_y, batch_x)
+        logits = model(src, tgt[:, :-1])
 
-        output = output.view(-1, output.size(-1))  # Reshape to (batch_size * sequence_length, vocab_size)
-        batch_target = batch_target.view(-1)  # Reshape to (batch_size * sequence_length)
+        optimizer.zero_grad()
 
-        loss = loss_fn(output, batch_target.type(torch.long))
-
-        opt.zero_grad()
+        tgt_out = tgt[:, 1:]
+        loss = loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
         loss.backward()
-        opt.step()
 
-        current_loss = loss.detach().item()
-        total_loss += current_loss
-        num_batches += 1
+        optimizer.step()
+        losses += loss.item()
 
         i += 1
-        if i == 50 and EXPERIMENTING:
+        if EXPERIMENTING and i > 50:
             break
 
-    return total_loss/num_batches
+    return losses / i
 
-
-def validation_loop(model, loss_fn):
+def evaluate(model, loss_fn, data_loader):
     model.eval()
-    total_loss = 0
-    num_batches = 0
+    losses = 0
 
     i = 0
+    for src, tgt in tqdm.tqdm(data_loader, desc="Evaluating model"):
+        src = src.to(DEVICE)
+        tgt = tgt.to(DEVICE)
 
-    with torch.no_grad():
-        for batch_x, batch_y, batch_target in tqdm.tqdm(VALIDATION_LOADER, desc="Validating model"):
+        logits = model(src, tgt[:, :-1])
 
-            batch_x, batch_y, batch_target = batch_x.to(DEVICE), batch_y.to(DEVICE), batch_target.to(DEVICE)
+        tgt_out = tgt[:, 1:]
+        loss = loss_fn(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+        losses += loss.item()
 
-            output = model(batch_y, batch_x)
+        i += 1
+        if EXPERIMENTING and i > 5:
+            break
 
-            output = output.view(-1, output.size(-1))
-            batch_target = batch_target.view(-1)
-
-            loss = loss_fn(output, batch_target.type(torch.long))
-
-            total_loss += loss.detach().item()
-            num_batches += 1
-
-            i += 1
-            if i == 5 and EXPERIMENTING:
-                break
-
-    return total_loss/num_batches
+    return losses / i
 
 
-def test_model(model, loss_fn):
-    # add stuff for token-by-token accuracy
-    model.eval()
-    total_loss = 0
-    num_batches = 0
+def fit(model, num_epochs=10):
+    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=PADDING_TOKEN)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, betas=(0.9, 0.98), eps=1e-9)
 
-    with torch.no_grad():
-        for batch_x, batch_y, batch_target in tqdm.tqdm(TEST_LOADER, desc="Testing model"):
-            batch_x, batch_y, batch_target = batch_x.to(DEVICE), batch_y.to(DEVICE), batch_target.to(DEVICE)
+    train, validation, test = get_dataloaders("default")
+    # train, validation, test = get_dataloaders("debug")
+    best_val_loss = float('inf')
 
-            output = model(batch_y, batch_x)
+    for epoch in range(num_epochs):
+        start_time = time.time()
+        train_loss = train_epoch(model, optimizer, loss_fn, train)
+        val_loss = evaluate(model, loss_fn, validation)
+        end_time = time.time()
 
-            output = output.view(-1, output.size(-1))
-            batch_target = batch_target.view(-1)
+        # if val_loss < best_val_loss:
+        #     best_val_loss = val_loss
+        #     torch.save(model.state_dict(), 'best_model.pth')
 
-            loss = loss_fn(output, batch_target.type(torch.long))
-
-            total_loss += loss.detach().item()
-            num_batches += 1
-
-    return total_loss/num_batches
-
-
-def fit(model, opt, loss_fn, num_epochs=10):
-    training_losses = []
-    validation_losses = []
-    for i in range(num_epochs):
-        print(f"Epoch {i+1}/{num_epochs}")
-        validation_losses.append(validation_loop(model, loss_fn))
-        training_losses.append(train_loop(model, opt, loss_fn))
-        print(f"Training loss: {training_losses[-1]}")
-        print(f"Validation loss: {validation_losses[-1]}")
-        print("\n\n")
-
-
-def save_model(model, path=f"./models/transformer_model_{int(time.time())}.pth"):
-    torch.save(model.state_dict(), path)
-    print(f"Model saved to {path}")
-
-def load_model(model, path=None):
-    if not path:
-        path = max(glob.glob("./models/*.pth"), key=os.path.getctime)
-    model.load_state_dict(torch.load(path, weights_only=True))
-    return model
-
-def predict(model, prompt, context, max_length=100):
-    model.eval()
-    with torch.no_grad():
-        prompt = torch.tensor(encode(prompt), dtype=torch.long, device=DEVICE).unsqueeze(0)
-        context = torch.tensor(encode(context)[:-1], dtype=torch.long, device=DEVICE).unsqueeze(0)
-        for _ in range(max_length):
-            pred = model(prompt, context)
-            next_item = pred.topk(1)[1].view(-1)[-1].item()
-            next_item = torch.tensor([[next_item]], device=DEVICE)
-            context = torch.cat([context, next_item], dim=1)
-            if next_item.view(-1).item() == END_OF_TEXT:
-                break
-
-        return decode(context.view(-1).tolist())
-
-
-def test_loss_function(output, target):
-    output_tokens = torch.nn.functional.one_hot(torch.tensor(output, dtype=torch.long, device=DEVICE), num_classes=VOCAB_SIZE).unsqueeze(0)
-    target_tokens = torch.tensor(target, dtype=torch.long, device=DEVICE).unsqueeze(0)
-    output_tokens = output_tokens.view(-1, output_tokens.size(-1))
-    target_tokens = target_tokens.view(-1)
-    print(output_tokens, target_tokens)
-    loss_fn = nn.CrossEntropyLoss()
-    loss = loss_fn(output_tokens.type(torch.float32), target_tokens.type(torch.float32))
-    return loss.item()
+        print(f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Validation loss: {val_loss:.3f}, Epoch time = {end_time - start_time:.3f}s")
 
 
 def predict_tokens(model, prompt, context, max_length=10):
     model.eval()
     with torch.no_grad():
-        prompt = torch.tensor(pad_end(prompt, MAX_TOKENS), dtype=torch.long, device=DEVICE).unsqueeze(0)
-        context = torch.tensor(context, dtype=torch.long, device=DEVICE).unsqueeze(0)
+        prompt = pad_sequence(torch.tensor(prompt).unsqueeze(0), batch_first=True, padding_value=PADDING_TOKEN).to(DEVICE)
+        context = torch.tensor(context).unsqueeze(0).to(DEVICE)
+
         for _ in range(max_length):
-            pred = model(prompt, context)
-            next_item = pred.topk(1)[1].view(-1)[-1].item()
-            next_item = torch.tensor([[next_item]], device=DEVICE)
-            context = torch.cat([context, next_item], dim=1)
-            if next_item.view(-1).item() == END_OF_TEXT:
+            out = model(prompt, context)
+            out = torch.argmax(out, dim=-1)
+            context = torch.cat((context, out[:, -1].unsqueeze(0)), dim=1)
+            if out[:, -1] == PADDING_TOKEN:
                 break
+    return context
 
-        return context.view(-1).tolist()
 
+# print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
 if __name__ == '__main__':
-    transformer = TransformerModel()
-    # fit(transformer, torch.optim.Adam(transformer.parameters(), lr=0.0001), nn.CrossEntropyLoss().to(DEVICE), num_epochs=10)
-    fit(transformer, torch.optim.SGD(transformer.parameters(), lr=0.01), nn.CrossEntropyLoss().to(DEVICE), num_epochs=10)
-    save_model(transformer)
+    model = Seq2SeqTransformer(num_encoder_layers=3, num_decoder_layers=3, emb_size=FEATURES, nhead=4, dim_feedforward=FEATURES)
+    fit(model, num_epochs=20)
+    save_model(model)
+    # load_model(model)
 
-    #
-    # from data_parser import done_message
-    # done_message()
-
-    # transformer = load_model(transformer)
-    # print(predict(transformer, "Albedo", "'''Albedo''' is the science of", 10))
-
-    print(predict_tokens(transformer, [1], [1, 0, 1, 0, 1, 0, 1, 0, 1, 0], 10))
-    # print(test_loss_function([1, 2, 3, 4, 5, 6, 7, 8], [1, 2, 3, 4, 5, 6, 7, 8]))
-
-# TODO: Checkpointing, reverting if model overfits, token accuracy, increased speed of data processing, tweak learning rate
+    tokens = predict_tokens(model, [50257,2025,998,1042,50256], [50257,7061,6,2025,998,1042,7061,6,318,257,1964,8876,290,3356,326,318,1028,477])
+    print(tokens)
+    print(decode(tokens[0].tolist()))

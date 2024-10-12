@@ -1,8 +1,4 @@
-from lxml.html.diff import token
-from tiktoken_ext.openai_public import cl100k_base
-
-
-def get_tokenizer():
+def get_tokenizer_100k():
     import tiktoken
     cl100k_base = tiktoken.get_encoding("cl100k_base")
     enc = tiktoken.Encoding(
@@ -17,14 +13,48 @@ def get_tokenizer():
             "<|padding|>": 100256,
         }
     )
+    global PADDING_TOKEN, START_OF_TEXT, END_OF_TEXT, UNUSED_TOKENS, VOCAB_SIZE
+    PADDING_TOKEN = 100256
+    START_OF_TEXT = 100261
+    END_OF_TEXT = 100257
+    UNUSED_TOKENS = [100262, 100263, 100264, 100265, 100266, 100267, 100268, 100269, 100270, 100271, 100272, 100273,
+                     100274, 100275, 100277]
+
+    VOCAB_SIZE = 100278
+
     return enc
+
+def get_tokenizer_50k():
+    import tiktoken
+    enc = tiktoken.get_encoding("gpt2")
+    enc = tiktoken.Encoding(
+        name="gpt2_with_padding",
+        pat_str=enc._pat_str,
+        mergeable_ranks=enc._mergeable_ranks,
+        special_tokens={
+            **enc._special_tokens,
+            "<|startoftext|>": 50257,
+            "<|padding|>": 50258,
+        }
+    )
+    global PADDING_TOKEN, START_OF_TEXT, END_OF_TEXT, UNUSED_TOKENS, VOCAB_SIZE
+    PADDING_TOKEN = 50258
+    START_OF_TEXT = 50257
+    END_OF_TEXT = 50256
+    VOCAB_SIZE = 50259
+    UNUSED_TOKENS = []
+    return enc
+
+def get_tokenizer():
+    return get_tokenizer_50k()
+
 
 # INDEX TOKENIZER
 # tokenizer = get_tokenizer()
 # unused = []
 # for i in range(tokenizer.max_token_value):
 #     try:
-#         tokenizer.decode([i])
+#         print(tokenizer.decode([i]))
 #     except:
 #         unused.append(i)
 # print(f"vocab_size = {tokenizer.max_token_value}")
@@ -32,21 +62,8 @@ def get_tokenizer():
 # print(f"UNUSED_TOKENS = {unused[1:]}")
 
 
-PADDING_TOKEN = 100256
-START_OF_TEXT = 100261
-END_OF_TEXT = 100257
-UNUSED_TOKENS = [100262, 100263, 100264, 100265, 100266, 100267, 100268, 100269, 100270, 100271, 100272, 100273, 100274, 100275, 100277]
-# START_OF_TEXT = -1
-# END_OF_TEXT = -2
-# PADDING_TOKEN = -3
-# UNUSED_TOKENS = [100256, 100257, 100261, 100262, 100263, 100264, 100265, 100266, 100267, 100268, 100269, 100270, 100271, 100272, 100273, 100274, 100275]
-
-VOCAB_SIZE = 100278
-
-
-seq_len = 50 # amount of context tokens used
-
 TOKENIZER = get_tokenizer()
+
 
 def decode(tokens):
     global TOKENIZER
@@ -78,6 +95,3 @@ def pad_end(tokens, new_len):
         return tokens[:new_len]
     return tokens + [PADDING_TOKEN] * (new_len - len(tokens))
 
-if __name__ == '__main__':
-    test = "1,2,3,4,5,6,7,8,9,10"
-    print(pad_end(test, 15))

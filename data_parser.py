@@ -166,18 +166,6 @@ def error_message():
     subprocess.run(["espeak", '"Fatal error encountered, terminating process"', "-ven-us"])
 
 
-# def generate_data(split=TRAIN, proportion_train=0.9, proportion_validation=0.05, random_seed=984856):
-#     # Right now, train and test don't include the same topics... maybe could change that if things not working?
-#     import random
-#     random.seed(random_seed)
-#     for file in os.listdir('cleaned_data'):
-#         tree = etree.parse('cleaned_data/' + file)
-#         root = tree.getroot()
-#         for datapoint in root.iter(tag='datapoint'):
-#             r = random.random()
-#             if (split == TRAIN and r < proportion_train) or (split == VALIDATION and proportion_train <= r < proportion_train+proportion_validation) or (split == TEST and r >= proportion_train + proportion_validation):
-#                 yield datapoint.find('key').text, datapoint.find('value').text
-
 if __name__ == '__main__':
     # try:
         # download_files(get_dump_urls(), 1)
