@@ -1,3 +1,5 @@
+from turtledemo.penrose import start
+
 from torch import Tensor
 import torch
 import torch.nn as nn
@@ -242,12 +244,14 @@ def evaluate(model, loss_fn, data_loader):
 
 
 def fit(model, num_epochs=10):
+    begin_time = str(int(time.time()))
     loss_fn = torch.nn.CrossEntropyLoss(ignore_index=PADDING_TOKEN)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, betas=(0.9, 0.98), eps=1e-9)
 
     train, validation, test = get_dataloaders("default")
     # train, validation, test = get_dataloaders("debug")
     best_val_loss = float('inf')
+    val_losses = []
 
     for epoch in range(num_epochs):
         start_time = time.time()
@@ -255,12 +259,15 @@ def fit(model, num_epochs=10):
         val_loss = evaluate(model, loss_fn, validation)
         end_time = time.time()
 
-        # if val_loss < best_val_loss:
-        #     best_val_loss = val_loss
-        #     torch.save(model.state_dict(), 'best_model.pth')
+        val_losses.append(val_loss)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), f'./models/best_model_{begin_time}.pth')
 
         print(f"Epoch: {epoch}, Train loss: {train_loss:.3f}, Validation loss: {val_loss:.3f}, Epoch time = {end_time - start_time:.3f}s")
 
+    print(val_losses)
 
 def predict_tokens(model, prompt, context, max_length=10):
     model.eval()
@@ -276,15 +283,39 @@ def predict_tokens(model, prompt, context, max_length=10):
                 break
     return context
 
+def get_num_parameters(model):
+    print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
-# print(sum(p.numel() for p in model.parameters() if p.requires_grad))
+def get_model():
+    return Seq2SeqTransformer(num_encoder_layers=3, num_decoder_layers=3, emb_size=FEATURES, nhead=4, dim_feedforward=FEATURES)
 
-if __name__ == '__main__':
-    model = Seq2SeqTransformer(num_encoder_layers=3, num_decoder_layers=3, emb_size=FEATURES, nhead=4, dim_feedforward=FEATURES)
-    fit(model, num_epochs=20)
-    save_model(model)
-    # load_model(model)
+def start_training(epochs=20):
+    model = get_model()
+    fit(model, num_epochs=epochs)
+    return model
 
+def keep_training(epochs=20):
+    model = get_model()
+    model = load_model(model)
+    fit(model, num_epochs=epochs)
+    return model
+
+def memory_usage_test():
+    global EXPERIMENTING
+    EXPERIMENTING = True
+    if DEVICE == torch.device('cuda'):
+        print(torch.cuda.memory_summary(DEVICE))
+        print("\n\n")
+        torch.cuda.memory._record_memory_history()
+        start_training(1)
+        print(torch.cuda.memory._dump_snapshot("snapshot.pickle"))
+
+def example_prediction():
+    model = get_model()
+    model = load_model(model)
     tokens = predict_tokens(model, [50257,2025,998,1042,50256], [50257,7061,6,2025,998,1042,7061,6,318,257,1964,8876,290,3356,326,318,1028,477])
     print(tokens)
     print(decode(tokens[0].tolist()))
+
+if __name__ == '__main__':
+    start_training(epochs=20)
