@@ -1,5 +1,3 @@
-from turtledemo.penrose import start
-
 from torch import Tensor
 import torch
 import torch.nn as nn
@@ -21,20 +19,29 @@ from tokenizer import PADDING_TOKEN, VOCAB_SIZE, pad_end, encode, decode
 
 
 # If this is True then the training loops will be cut short so it doesn't go through the entire process
-EXPERIMENTING = True
+EXPERIMENTING = False
+CLOUD = 1
+LOCAL = 0
+PLATFORM = LOCAL
 
 # MAXIMUM POWER!!!!!
 # MAX_TOKENS = 1000
 # FEATURES = 2048
 # BATCH_SIZE = 16
 
-# Lame version
-MAX_TOKENS = 50
-FEATURES = 256
-BATCH_SIZE = 4
+if PLATFORM == CLOUD:
+    MAX_TOKENS = 50
+    FEATURES = 256
+    BATCH_SIZE = 64
+else:
+    # Lame version
+    MAX_TOKENS = 50
+    FEATURES = 256
+    BATCH_SIZE = 4
 
 
 def get_device():
+    # return torch.device('cpu')
     if torch.cuda.is_available():
         return torch.device('cuda')
     elif torch.backends.mps.is_available():
@@ -287,7 +294,7 @@ def get_num_parameters(model):
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
 def get_model():
-    return Seq2SeqTransformer(num_encoder_layers=3, num_decoder_layers=3, emb_size=FEATURES, nhead=4, dim_feedforward=FEATURES)
+    return Seq2SeqTransformer(num_encoder_layers=3, num_decoder_layers=3, emb_size=FEATURES, nhead=8, dim_feedforward=FEATURES).to(DEVICE)
 
 def start_training(epochs=20):
     model = get_model()
@@ -304,10 +311,10 @@ def memory_usage_test():
     global EXPERIMENTING
     EXPERIMENTING = True
     if DEVICE == torch.device('cuda'):
-        print(torch.cuda.memory_summary(DEVICE))
         print("\n\n")
         torch.cuda.memory._record_memory_history()
         start_training(1)
+        print(torch.cuda.memory_summary(DEVICE))
         print(torch.cuda.memory._dump_snapshot("snapshot.pickle"))
 
 
@@ -319,4 +326,5 @@ def example_prediction():
     print(decode(tokens[0].tolist()))
 
 if __name__ == '__main__':
-    start_training(epochs=20)
+    start_training(epochs=8)
+    # memory_usage_test()
