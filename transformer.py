@@ -310,6 +310,7 @@ def memory_usage_test():
         start_training(1)
         print(torch.cuda.memory._dump_snapshot("snapshot.pickle"))
 
+
 def example_prediction():
     model = get_model()
     model = load_model(model)
