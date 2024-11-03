@@ -61,11 +61,17 @@ def clean_text(text):
         remove_html = opening_braces + Anything() + closing_braces
         text = remove_html.remove_from(text)
 
-        for junk in ("== References ==", "==References==", "== External links ==", "==External links=="):
-            text = remove_below(text, junk)
+        # for junk in ("== References ==", "==References==", "== External links ==", "==External links=="):
+        #     text = remove_below(text, junk)
+
+        new_text = ""
+        for line in text.split("\n"):
+            if not (line.startswith("==") or line.strip().startswith("*")):
+                new_text += line + "\n"
+        text = new_text
 
         if not text:
-            print("THERE WAS PROBLEM :(")
+            # print("THERE WAS PROBLEM :(")
             return ""
 
         text = text.replace("()", "")

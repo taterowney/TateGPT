@@ -22,7 +22,7 @@ from tokenizer import PADDING_TOKEN, VOCAB_SIZE, pad_end, encode, decode
 EXPERIMENTING = False
 CLOUD = 1
 LOCAL = 0
-PLATFORM = LOCAL
+PLATFORM = CLOUD
 
 # MAXIMUM POWER!!!!!
 # MAX_TOKENS = 1000
@@ -324,6 +324,14 @@ def example_prediction():
     tokens = predict_tokens(model, [50257,2025,998,1042,50256], [50257,7061,6,2025,998,1042,7061,6,318,257,1964,8876,290,3356,326,318,1028,477])
     print(tokens)
     print(decode(tokens[0].tolist()))
+
+def predict_text(prompt, context):
+    model = get_model()
+    model = load_model(model)
+    prompt = encode(prompt)
+    context = encode(context)[:-1]
+    tokens = predict_tokens(model, prompt, context)
+    return decode(tokens[0].tolist())
 
 if __name__ == '__main__':
     start_training(epochs=8)

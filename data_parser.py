@@ -1,5 +1,13 @@
+from idlelib.autocomplete import ATTRS
+
 from lxml import etree
-import io, json, os, random
+import io, json, os, random, multiprocessing
+
+from sympy.codegen import Attribute
+
+from text_cleaner import clean_text
+from tokenizer import encode, decode
+import tqdm
 
 DISCARD_REDIRECTS = True
 FRACTION_TO_KEEP = 1.0
@@ -119,20 +127,85 @@ def process_file(f):
 
     stream_to_xml_file(generator(), './cleaned_data/' + ".".join(f.split(".")[:-1]) + ".xml")
 
+class ThreadingFileProcessor:
+    def __init__(self, source_file, num_threads):
+        self.manager = multiprocessing.Manager()
+        self.write_queue = self.manager.Queue()
+        self.num_processes = num_threads
+        self.source_file = source_file
+        self.target_file = './cleaned_data/' + ".".join(source_file.split(".")[:-1]) + ".xml"
 
-def clean_files():
-    import multiprocessing
+    def process(self):
+        # tree, root = load_without_namespace('./raw_data/' + self.source_file)
 
+        # new processes
+        writer_process = multiprocessing.Process(target=write_to_file, args=(self.write_queue, self.target_file))
+        writer_process.start()
+
+        # Create and start processing worker processes
+        processes = []
+        for proc_index in range(self.num_processes):
+            p = multiprocessing.Process(target=process_text, args=(proc_index, self.num_processes, self.write_queue, self.source_file))
+            p.start()
+            processes.append(p)
+
+        # Wait for all worker processes to finish
+        for p in processes:
+            p.join()
+
+        # Signal the writer process to stop by putting a sentinel (None) in the queue
+        self.write_queue.put(None)
+        writer_process.join()
+
+def process_text(proc_index, total_processes, output_queue, source_file):
+    # Replace with actual text processing logic
+    xml_tree, _ = load_without_namespace('./raw_data/' + source_file)
+    pages = xml_tree.xpath(f'/mediawiki/*[position() mod {total_processes} = {proc_index}]')
+    for page in pages:
+        try:
+            title = page.find('title').text
+            content = page.find('revision').find('text').text
+        except AttributeError:
+            continue
+
+        if DISCARD_REDIRECTS and content.lower().startswith("#redirect"):
+            continue
+
+        if random.random() > FRACTION_TO_KEEP:
+            continue
+
+        content = clean_text(content)
+
+        if content:
+            processed_data = {'key': ','.join(map(str, encode(title))), 'value': ','.join(map(str, encode(content)))}
+            output_queue.put(processed_data)
+
+
+def write_to_file(output_queue, output_file_path):
+    with open(output_file_path, 'w') as f:
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write('<dataset>\n')
+        while True:
+            data = output_queue.get()
+            if data is None:  # Sentinel to signal the end
+                break
+            # f.write(data + '\n')
+            f.write(f'  <datapoint>\n')
+            f.write(f'    <key>{data["key"]}</key>\n')
+            f.write(f'    <value>{data["value"]}</value>\n')
+            f.write(f'    <value_len>{len(data["value"].split(","))}</value_len>\n')
+            f.write(f'  </datapoint>\n')
+        f.write('</dataset>\n')
+
+
+def clean_files_threaded(num_threads=10):
     files = os.listdir('raw_data')
-
-    xml_files = []
 
     for file in files:
         if "xml" in file.split(".")[-1]:
-            xml_files.append(file)
+            t = ThreadingFileProcessor(file, num_threads)
+            t.process()
 
-    with multiprocessing.Pool() as pool:
-        pool.map(process_file, xml_files)
 
 def stream_to_xml_file(generator, file):
     with open(file, 'w', encoding='utf-8') as f:
@@ -165,13 +238,23 @@ def error_message():
     import subprocess
     subprocess.run(["espeak", '"Fatal error encountered, terminating process"', "-ven-us"])
 
+def example_data(idx=0):
+    tree, root = load_without_namespace("./cleaned_data/" + os.listdir("cleaned_data")[0])
+    i = 0
+    for datapoint in root.iter(tag="datapoint"):
+        if idx == i:
+            print(decode(list(map(int, datapoint.find('key').text.split(',')))))
+            print(decode(list(map(int, datapoint.find('value').text.split(',')))))
+            break
+        i += 1
 
 if __name__ == '__main__':
+    example_data(10)
     # try:
         # download_files(get_dump_urls(), 1)
         # unzip_files()
-        clean_files()
-        done_message()
+        # clean_files_threaded(num_threads=10)
+        # done_message()
         # for title, text in generate_data(split=VALIDATION):
         #     print(title, text)
         #     break
