@@ -13,7 +13,7 @@ from tokenizer import PADDING_TOKEN, VOCAB_SIZE, pad_end, encode, decode
 # Screen session
 # screen -S python-session
 # command; sudo shutdown -h now
-# (crtl + a) then d to detach
+# (crtl + a) then d to detachdisambiguation
 # To reattach:
 # screen -r python-session
 
@@ -332,6 +332,7 @@ def predict_text(prompt, context):
     context = encode(context)[:-1]
     tokens = predict_tokens(model, prompt, context)
     return decode(tokens[0].tolist())
+
 
 if __name__ == '__main__':
     start_training(epochs=8)
